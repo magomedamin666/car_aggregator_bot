@@ -9,9 +9,12 @@ from app.db.models import Base as models_base
 
 logger = logging.getLogger(__name__)
 
+db_url = settings.DB_URL
+if db_url.startswith("postgresql://"):
+    db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
 engine = create_async_engine(
-    settings.DB_URL,
+    db_url,
     echo=False,
     pool_pre_ping=True,
 )
