@@ -20,8 +20,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def periodic_parsing() -> None:
-    """Выполняет парсинг berkat.ru каждые 10 минут."""
+async def periodic_parsing():
+    """Парсинг каждые 10 минут"""
     while True:
         logger.info("⏰ Запуск парсинга berkat.ru...")
         try:
@@ -29,25 +29,26 @@ async def periodic_parsing() -> None:
             logger.info("✅ Парсинг завершён. Следующий запуск через 10 минут.")
         except Exception as e:
             logger.error(f"❌ Ошибка парсинга: {e}")
-
+        
+        # Ждём 10 минут (600 секунд)
         await asyncio.sleep(600)
 
 
-async def main() -> None:
-    """Основная точка входа приложения."""
+async def main():
     bot = Bot(token=settings.BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
-
+    
+    # Запускаем парсер в фоне
     asyncio.create_task(periodic_parsing())
-
+    
     logger.info("=" * 60)
     logger.info("✅ CarBot запущен!")
     logger.info("   • Бот принимает команды")
     logger.info("   • Парсинг berkat.ru каждые 10 минут")
     logger.info("   • Уведомления без дубликатов")
     logger.info("=" * 60)
-
+    
     try:
         await dp.start_polling(bot)
     except KeyboardInterrupt:
