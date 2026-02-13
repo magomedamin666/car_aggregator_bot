@@ -1,14 +1,14 @@
-# .gitignore — КОРЕНЬ ПРОЕКТА
-
-# Виртуальное окружение
+# Virtual environment
 venv/
 .venv/
 env/
 
-# Конфигурация
+# Configuration
 .env
+.env.local
+.env.*.local
 
-# Кэш Python
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
@@ -17,17 +17,17 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Логи
+# Logs
 logs/
 *.log
 
-# IDE / редакторы
+# IDE / Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 .DS_Store
 
-# База данных (локальная разработка)
+# Local database files
 *.sqlite3
 *.db
