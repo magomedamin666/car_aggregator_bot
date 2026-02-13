@@ -1,0 +1,33 @@
+# .gitignore — КОРЕНЬ ПРОЕКТА
+
+# Виртуальное окружение
+venv/
+.venv/
+env/
+
+# Конфигурация
+.env
+
+# Кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Логи
+logs/
+*.log
+
+# IDE / редакторы
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# База данных (локальная разработка)
+*.sqlite3
+*.db
