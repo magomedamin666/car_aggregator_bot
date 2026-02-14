@@ -330,7 +330,7 @@ async def process_price_to(message: Message, state: FSMContext):
             return
 
     await state.update_data(price_to=price_to)
-    text = "👉 <b>Шаг 7:</b> Пробег ДО (в км, например: 100000)\nИли «Пропустить»:"
+    text = "👉 <b>Шаг 7:</b> Пробег ДО (в км, например: 100000 или 100 тыс)\nИли «Пропустить»:"
     sent = await message.answer(text, reply_markup=skip_keyboard(), parse_mode="HTML")
 
     message_ids.append(sent.message_id)
@@ -347,15 +347,24 @@ async def process_mileage_to(message: Message, state: FSMContext):
     mileage_to = None
     if message.text != "Пропустить":
         try:
-            mileage_text = message.text.strip().replace(" ", "").replace("км", "").replace("тыс", "")
-            if "тыс" in message.text.lower() or (len(mileage_text) <= 4 and int(mileage_text) < 1000):
-                mileage_to = int(float(mileage_text) * 1000)
-            else:
-                mileage_to = int(mileage_text)
-
+            text_lower = message.text.lower().strip()
+            # Удаляем лишние символы
+            clean_text = text_lower.replace(" ", "").replace("км", "").replace(".", "").replace(",", "")
+            
+            # Определяем множитель
+            multiplier = 1000 if "тыс" in text_lower or "т." in text_lower else 1
+            
+            # Извлекаем число
+            number_text = "".join(c for c in clean_text if c.isdigit() or c == ".")
+            if not number_text:
+                raise ValueError("Не найдено число в тексте")
+            
+            mileage_val = float(number_text)
+            mileage_to = int(mileage_val * multiplier)
+            
             if mileage_to < 0 or mileage_to > 1000000:
                 raise ValueError("Некорректный пробег")
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, TypeError) as e:
             sent = await message.answer(
                 "❌ Некорректный пробег. Введите число от 0 до 1 000 000 или «Пропустить»",
                 reply_markup=skip_keyboard(),
@@ -532,7 +541,6 @@ async def cmd_myfilters(message: Message):
         text += f"⚙️ <b>Статус:</b> {status}\n\n"
 
         row = [
-            InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_filter_{f.id}"),
             InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_filter_{f.id}"),
         ]
         buttons.append(row)

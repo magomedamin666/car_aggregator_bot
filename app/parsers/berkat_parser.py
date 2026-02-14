@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import hashlib
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -45,6 +46,8 @@ HEADERS = {
 
 
 async def fetch(session: aiohttp.ClientSession, url: str) -> Optional[str]:
+    url = url.strip()
+    
     try:
         async with session.get(url, headers=HEADERS, timeout=15) as resp:
             if resp.status == 200:
@@ -67,19 +70,6 @@ def matches_filter(ad: Dict, filter_set: FilterSet) -> bool:
         filter_name = filter_set.name
 
         logger.info(f"Проверка: '{ad_title}...' vs фильтр '{filter_name}'")
-
-        ad_parsed_at = ad.get("parsed_at")
-        filter_created_at = filter_set.created_at
-
-        if ad_parsed_at and filter_created_at:
-            filter_created_naive = (
-                filter_created_at.replace(tzinfo=None)
-                if filter_created_at.tzinfo
-                else filter_created_at
-            )
-            if ad_parsed_at < filter_created_naive:
-                logger.debug("Пропускаем: объявление старше фильтра")
-                return False
 
         brand = filters.get("brand")
         if brand:
@@ -211,29 +201,41 @@ def parse_ad_block(block) -> Optional[Dict]:
             return None
 
         href = link_tag["href"].strip()
-        url = urljoin(BASE_URL, href)
+        url = urljoin(BASE_URL, href).strip()
 
         external_id = url.rstrip("/").split("/")[-1].strip()
         if not external_id.isdigit() or len(external_id) < 4:
-            external_id = str(hash(url))[:20]
+            external_id = hashlib.md5(url.encode('utf-8')).hexdigest()[:20]
 
         title_tag = block.find("h3", class_="board_list_item_title") or block.find("a")
         title = title_tag.get_text(strip=True) if title_tag else ""
 
         title_lower = title.lower()
-        non_car_keywords = [
-            "эвакуатор", "установка гбо", "ремонт", "покраска", "диагностика",
-            "шиномонтаж", "запчасти", "детали", "аренда авто", "прокат авто",
-            "грузовой", "грузовик", "камаз", "автобус", "прицеп", "мотоцикл",
-            "скутер", "квадроцикл", "выкуп авто", "залог", "на запчасти",
-            "битый", "аварийный",
+        
+        non_car_patterns = [
+            r'\bэвакуатор\b', r'\bустановка гбо\b', r'\bремонт\b', r'\bпокраска\b', 
+            r'\bдиагностика\b', r'\bшиномонтаж\b', r'\bзапчасти?\b', r'\bдетали?\b',
+            r'\bаренда авто\b', r'\bпрокат авто\b', r'\bгрузовой\b', r'\bгрузовик\b',
+            r'\bкамаз\b', r'\bавтобус\b', r'\bприцеп\b', r'\bмотоцикл\b',
+            r'\bскутер\b', r'\bквадроцикл\b', r'\bвыкуп авто\b', r'\bзалог\b',
+            r'\bна запчасти?\b', r'\bбиты[йя]\b', r'\bаварийн[ыао]\b', r'\bколпаки?\b',
+            r'\bголовка\b', r'\bдвигател\b', r'\bкузовн(ые)?\b', r'\bсалонн(ые)?\b',
+            r'\bстекло\b', r'\bфара\b', r'\bбампер\b', r'\bдверь\b', r'\bкрыло\b',
+            r'\bкапот\b', r'\bбагажник\b', r'\bсиденья?\b', r'\bрулев(ой|ая)\b',
         ]
-        if any(word in title_lower for word in non_car_keywords):
+        
+        if any(re.search(pattern, title_lower) for pattern in non_car_patterns):
+            logger.debug(f"Пропущено (не авто): {title[:50]}")
             return None
 
         known_brands = [
-            "lada", "ваз", "лада", "приора", "приору", "гранта", "гранту",
-            "калина", "калину", "веста", "весту", "ренуо", "renault", "рено",
+            "гранта", "гранту", "гранте", "гранты", "грантой",
+            "лада", "ладу", "ладе", "лады", "ладой",
+            "ваз", "вазу", "вазе", "вазы", "вазой",
+            "приора", "приору", "приоре", "приоры", "приорой",
+            "калина", "калину", "калине", "калины", "калиной",
+            "веста", "весту", "весте", "весты", "вестой",
+            "ренуо", "renault", "рено",
             "киа", "kia", "хендай", "hyundai", "тойота", "toyota", "ниссан",
             "nissan", "мазда", "mazda", "мицубиси", "mitsubishi", "шкода",
             "skoda", "фольксваген", "волкцваген", "volkswagen", "vw", "опель",
@@ -242,20 +244,23 @@ def parse_ad_block(block) -> Optional[Dict]:
             "volvo", "субару", "subaru", "хонда", "хунда", "хонду", "honda",
             "сузуки", "suzuki", "дэу", "даеву", "daewoo", "газель", "газ", "уаз",
             "уазик", "moskvich", "москвич", "элантра", "elantra", "solaris",
-            "соларис", "рио", "rio", "creta", "крета",
+            "соларис", "рио", "rio", "creta", "крета", "джип", "jeep", "chery",
+            "черри", "лифан", "lifan", "geely", "джили", "газель", "gazel",
         ]
 
         brand = ""
         model = ""
+        
         for brand_candidate in known_brands:
-            if brand_candidate in title_lower:
+            if re.search(rf'\b{re.escape(brand_candidate)}\b', title_lower):
                 brand = brand_candidate.capitalize()
-                parts = title.split(brand_candidate, 1)
+                parts = re.split(rf'\b{re.escape(brand_candidate)}\b', title_lower, maxsplit=1)
                 if len(parts) > 1:
-                    model = parts[1].strip()
+                    model = parts[1].strip().title()
                 break
 
         if not brand:
+            logger.debug(f"Пропущено (бренд не определён): {title[:50]}")
             return None
 
         year_match = re.search(r"\b(19[89]\d|20[012]\d)\b", title)
@@ -270,7 +275,7 @@ def parse_ad_block(block) -> Optional[Dict]:
                 price_text = price_match.group(1).replace(" ", "").replace("\xa0", "")
                 try:
                     price = int(price_text)
-                    if 10 <= price <= 5000:
+                    if price < 100000 and ("тыс" in price_str.lower() or "т.р" in price_str.lower() or "т р" in price_str.lower()):
                         price *= 1000
                     if price < 5000 or price > 50000000:
                         price = None
@@ -278,24 +283,23 @@ def parse_ad_block(block) -> Optional[Dict]:
                     price = None
 
         mileage = None
-        mileage_text = block.find(string=re.compile(r"пробег|км|тыс", re.I))
+        mileage_text = block.find(string=re.compile(r"пробег|км|тыс\.?", re.I))
         if mileage_text:
             parent_text = mileage_text.find_parent().get_text(strip=True)
             mileage_match = re.search(
-                r"(\d+[\s\.]?\d*)\s*(тыс\.?|т\.?|км)", parent_text, re.I
+                r"(\d+(?:[.,]\d+)?)\s*(?:тыс\.?|т\.?|км)", parent_text, re.I
             )
             if mileage_match:
                 try:
-                    mileage_val = float(
-                        mileage_match.group(1).replace(" ", "").replace(".", "")
-                    )
-                    if (
-                        "тыс" in mileage_match.group(2).lower()
-                        or "т" in mileage_match.group(2).lower()
-                    ):
+                    mileage_val_str = mileage_match.group(1).replace(",", ".").strip()
+                    mileage_val = float(mileage_val_str)
+                    
+                    unit = mileage_match.group(0).lower()
+                    if "тыс" in unit or "т." in unit or "т " in unit:
                         mileage = int(mileage_val * 1000)
                     else:
                         mileage = int(mileage_val)
+                        
                     if mileage < 1000 or mileage > 1000000:
                         mileage = None
                 except (ValueError, TypeError, OverflowError):
@@ -304,9 +308,10 @@ def parse_ad_block(block) -> Optional[Dict]:
         region = ""
         region_tag = block.find(
             string=re.compile(
-                r"Москва|СПб|Санкт-Петербург|Новосибирск|Екатеринбург|Казань|Нижний|Челябинск|"
+                r"Москва|СПб|Санкт-Петербург|Новосибирск|Екатеринбург|Казань|Нижн(?:ий|его)|Челябинск|"
                 r"Омск|Самара|Ростов|Уфа|Красноярск|Воронеж|Пермь|Волгоград|Назрань|Магас|"
-                r"Ингушетия|Чечня|Дагестан|Грозный|Дербент|Махачкала|Владикавказ",
+                r"Ингушетия|Чечня|Дагестан|Грозный|Дербент|Махачкала|Владикавказ|Краснодар|"
+                r"Сочи|Владивосток|Иркутск|Ярославль|Тюмень|Барнаул|Томск|Оренбург",
                 re.I,
             )
         )
@@ -314,11 +319,15 @@ def parse_ad_block(block) -> Optional[Dict]:
             region = region_tag.find_parent().get_text(strip=True)[:50]
 
         img_tag = block.find("img", src=True)
-        if img_tag:
+        photo_url = None
+        if img_tag and img_tag.get("src"):
             src = img_tag["src"].strip()
-            photo_url = urljoin(BASE_URL, src) if src else None
-        else:
-            photo_url = None
+            if not src.startswith(("http://", "https://")):
+                photo_url = urljoin(BASE_URL, src)
+            else:
+                photo_url = src
+
+        parsed_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         return {
             "source": "berkat.ru",
@@ -332,7 +341,7 @@ def parse_ad_block(block) -> Optional[Dict]:
             "region": region,
             "url": url,
             "photo_url": photo_url,
-            "parsed_at": datetime.now(timezone.utc).replace(tzinfo=None),
+            "parsed_at": parsed_at,
         }
 
     except Exception as e:
@@ -368,7 +377,7 @@ async def parse_berkat_pages(
 
         logger.info(
             f"Страница {page}: найдено {len(ad_blocks)} блоков, "
-            f"спарсено {len(page_ads)} авто-объявлений"
+            f"спарсено {len(page_ads)} авто-объявлений (отфильтровано не-авто: {len(ad_blocks) - len(page_ads)})"
         )
         all_ads.extend(page_ads)
 
@@ -401,7 +410,7 @@ async def save_new_ads(ads: List[Dict]) -> List[Ad]:
             for ad in saved_ads:
                 await db.refresh(ad)
 
-        logger.info(f"Сохранено новых объявлений: {saved_count}")
+        logger.info(f"Сохранено новых объявлений: {saved_count} (из {len(ads)} спарсенных)")
 
     return saved_ads
 
@@ -417,13 +426,14 @@ async def check_filters_and_notify(saved_ads: List[Ad]) -> None:
         active_filters = await get_all_active_filters(db)
         logger.info(f"Найдено активных фильтров: {len(active_filters)}")
 
+        notifications_sent = 0
         for ad in saved_ads:
             for filter_set in active_filters:
                 if matches_filter(ad.__dict__, filter_set):
                     if await has_sent_notification(db, filter_set.user_id, ad.id, filter_set.id):
                         logger.debug(
                             f"Уведомление пропущено (уже отправлялось): "
-                            f"пользователь={filter_set.user_id}, объявление={ad.id}"
+                            f"пользователь={filter_set.user_id}, объявление={ad.id}, фильтр={filter_set.id}"
                         )
                         continue
 
@@ -434,12 +444,15 @@ async def check_filters_and_notify(saved_ads: List[Ad]) -> None:
                             filter_name=filter_set.name,
                         )
                         await mark_notification_sent(db, filter_set.user_id, ad.id, filter_set.id)
+                        notifications_sent += 1
                         logger.info(
-                            f"Уведомление отправлено пользователю {filter_set.user_id} "
-                            f"по фильтру '{filter_set.name}'"
+                            f"✅ Уведомление отправлено пользователю {filter_set.user_id} "
+                            f"по фильтру '{filter_set.name}': {ad.title[:40]}..."
                         )
                     except Exception as e:
-                        logger.error(f"Ошибка отправки уведомления: {e}")
+                        logger.error(f"Ошибка отправки уведомления пользователю {filter_set.user_id}: {e}")
+
+        logger.info(f"Всего отправлено уведомлений: {notifications_sent}")
 
 
 async def berkat_parse_task_async() -> None:
@@ -455,9 +468,9 @@ async def berkat_parse_task_async() -> None:
                 if saved_ads:
                     await check_filters_and_notify(saved_ads)
                 else:
-                    logger.info("Новые объявления не найдены.")
+                    logger.info("Новые объявления не найдены (все уже в БД).")
             else:
-                logger.warning("Авто-объявления не найдены.")
+                logger.warning("Авто-объявления не найдены на сайте.")
 
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()

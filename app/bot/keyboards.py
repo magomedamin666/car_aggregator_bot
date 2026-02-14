@@ -143,6 +143,8 @@ def popular_models_keyboard(brand: str) -> ReplyKeyboardMarkup:
         "Lada": [
             "Granta",
             "Vesta",
+            "Priora",     
+            "Kalina", 
             "Niva",
             "XRAY",
             "Largus",
