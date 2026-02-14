@@ -10,5 +10,4 @@ class FilterForm(StatesGroup):
     price_from = State()
     price_to = State()
     mileage_to = State()
-    region = State()
     confirm = State()

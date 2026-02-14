@@ -16,7 +16,6 @@ from app.bot.keyboards import (
     skip_keyboard,
     popular_brands_keyboard,
     popular_models_keyboard,
-    regions_keyboard,
     confirm_keyboard,
 )
 from app.db.crud import (
@@ -71,7 +70,7 @@ async def cmd_start(message: Message):
                 "🔍 Мониторю сайт <b>berkat.ru</b> и присылаю вам новые объявления,\n"
                 "которые точно соответствуют вашим критериям.\n\n"
                 "✨ <b>Возможности:</b>\n"
-                "   • Создавайте фильтры по марке, модели, году, цене и региону\n"
+                "   • Создавайте фильтры по марке, модели, году и цене\n"
                 "   • Получайте уведомления каждые 10 минут о новых объявлениях\n"
                 "   • Активируйте/деактивируйте фильтры в один клик\n"
                 "   • Никакого спама — только релевантные объявления\n\n"
@@ -99,7 +98,7 @@ async def cmd_help(message: Message):
     help_text = (
         "ℹ️ <b>Справка по CarBot</b>\n\n"
         "🔍 <b>Как это работает:</b>\n"
-        "   1. Создайте фильтр с вашими критериями (марка, модель, год, цена, регион)\n"
+        "   1. Создайте фильтр с вашими критериями (марка, модель, год, цена)\n"
         "   2. Бот каждые 10 минут проверяет новые объявления на berkat.ru\n"
         "   3. При совпадении — вы получаете уведомление с информацией и ссылкой на объявление\n\n"
         "⚙️ <b>Управление фильтрами:</b>\n"
@@ -107,7 +106,7 @@ async def cmd_help(message: Message):
         "   • «📋 Мои фильтры» — посмотреть активные фильтры и управлять ими\n"
         "   • «🗑 Удалить фильтр» — удалить фильтр по ID или названию\n\n"
         "💡 <b>Советы:</b>\n"
-        "   • Для максимального охвата оставляйте поля «Модель» и «Регион» пустыми\n"
+        "   • Для максимального охвата оставляйте поля «Модель» пустыми\n"
         "   • Фильтр «Lada, цена до 500 000 ₽» найдёт ВАЗ 2107, 2114, Гранту и др.\n"
         "   • Объявления проверяются каждые 10 минут — новые придут быстро!\n\n"
         "🚀 <b>Готовы начать?</b>\n"
@@ -366,25 +365,9 @@ async def process_mileage_to(message: Message, state: FSMContext):
             return
 
     await state.update_data(mileage_to=mileage_to)
-    text = "👉 <b>Шаг 8:</b> Регион (например: Москва, СПб)\nИли «Пропустить»:"
-    sent = await message.answer(text, reply_markup=regions_keyboard(), parse_mode="HTML")
-
-    message_ids.append(sent.message_id)
-    await state.update_data(message_ids=message_ids)
-    await state.set_state(FilterForm.region)
-
-
-@router.message(FilterForm.region)
-async def process_region(message: Message, state: FSMContext):
+    
     data = await state.get_data()
-    message_ids = data.get("message_ids", [])
-    message_ids.append(message.message_id)
-
-    region = message.text.strip() if message.text != "Пропустить" else None
-    await state.update_data(region=region)
-
-    data = await state.get_data()
-
+    
     name_parts = []
     if data.get("brand"):
         name_parts.append(data["brand"])
@@ -405,9 +388,7 @@ async def process_region(message: Message, state: FSMContext):
     if data.get("mileage_to"):
         mileage_str = f"{data['mileage_to']:,}".replace(",", " ")
         name_parts.append(f"до {mileage_str}км")
-    if data.get("region"):
-        name_parts.append(data["region"])
-
+    
     name = " ".join([p for p in name_parts if p]).strip() or "Без названия"
     await state.update_data(name=name)
 
@@ -430,8 +411,6 @@ async def process_region(message: Message, state: FSMContext):
     if data.get("mileage_to"):
         mileage_str = f"{data['mileage_to']:,}".replace(",", " ")
         text += f"<b>Пробег до:</b> {mileage_str} км\n"
-    if data.get("region"):
-        text += f"<b>Регион:</b> {data['region']}\n"
 
     text += "\n<b>Что дальше?</b>\n"
     text += "• Нажмите ✅ <b>Сохранить</b> — фильтр начнёт работать немедленно\n"
@@ -456,7 +435,7 @@ async def save_filter(callback: CallbackQuery, state: FSMContext):
         "max_price": data.get("price_to"),
         "min_mileage": None,
         "max_mileage": data.get("mileage_to"),
-        "region": data.get("region"),
+        "region": None,
     }
 
     try:

@@ -10,8 +10,13 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
 from app.bot.telegram_bot import send_ad_notification
-from app.db.crud import get_ad_by_source_external, get_all_active_filters
-from app.db.models import Ad, FilterSet, SentNotification
+from app.db.crud import (
+    get_ad_by_source_external,
+    get_all_active_filters,
+    has_sent_notification,
+    mark_notification_sent,
+)
+from app.db.models import Ad, FilterSet
 from app.db.session import async_session
 
 
@@ -40,7 +45,6 @@ HEADERS = {
 
 
 async def fetch(session: aiohttp.ClientSession, url: str) -> Optional[str]:
-    """Загружает HTML-страницу по указанному URL."""
     try:
         async with session.get(url, headers=HEADERS, timeout=15) as resp:
             if resp.status == 200:
@@ -57,7 +61,6 @@ async def fetch(session: aiohttp.ClientSession, url: str) -> Optional[str]:
 
 
 def matches_filter(ad: Dict, filter_set: FilterSet) -> bool:
-    """Проверяет соответствие объявления критериям фильтра."""
     try:
         filters = filter_set.filters_json
         ad_title = ad.get("title", "")[:40]
@@ -85,20 +88,10 @@ def matches_filter(ad: Dict, filter_set: FilterSet) -> bool:
 
             BRAND_SYNONYMS = {
                 "lada": [
-                    "lada",
-                    "лада",
-                    "ваз",
-                    "ваза",
-                    "вазик",
-                    "жигули",
-                    "жигуль",
-                    "классика",
-                    "копейка",
-                    "шестерка",
-                    "семерка",
-                    "восьмерка",
-                    "девятка",
-                    "десятка",
+                    "lada", "лада", "ваз", "ваза", "вазик", "жигули", "жигуль",
+                    "классика", "копейка", "шестерка", "семерка", "восьмерка",
+                    "девятка", "десятка", "приора", "приору", "гранта", "гранту",
+                    "калина", "калину", "веста", "весту",
                 ],
                 "renault": ["renault", "рено", "реноль", "ренуо", "ренаулт"],
                 "kia": ["kia", "киа", "кья", "киас", "киашка"],
@@ -133,13 +126,11 @@ def matches_filter(ad: Dict, filter_set: FilterSet) -> bool:
                     for syn in synonyms:
                         if syn in ad_brand_clean or ad_brand_clean in syn:
                             matched_brand = True
-                            logger.info(f"Бренд: '{filter_brand}' найден как '{syn}'")
                             break
                     if matched_brand:
                         break
 
             if not matched_brand:
-                logger.info(f"Бренд: '{filter_brand}' не найден в '{ad_brand_clean}'")
                 return False
 
         model = filters.get("model")
@@ -147,41 +138,31 @@ def matches_filter(ad: Dict, filter_set: FilterSet) -> bool:
             ad_model = ad.get("model", "").lower().strip()
             filter_model = model.lower().strip()
             if filter_model not in ad_model:
-                logger.info(f"Модель: '{filter_model}' не найдена в '{ad_model}'")
                 return False
-            logger.info(f"Модель: '{filter_model}' найдена")
 
         ad_year = ad.get("year")
         if ad_year is not None:
             min_year = filters.get("min_year")
             max_year = filters.get("max_year")
             if min_year and ad_year < min_year:
-                logger.info(f"Год: {ad_year} < {min_year}")
                 return False
             if max_year and ad_year > max_year:
-                logger.info(f"Год: {ad_year} > {max_year}")
                 return False
-            logger.info(f"Год: {ad_year} в диапазоне")
 
         ad_price = ad.get("price")
         if ad_price is not None:
             min_price = filters.get("min_price")
             max_price = filters.get("max_price")
             if min_price and ad_price < min_price:
-                logger.info(f"Цена: {ad_price:,} ₽ < {min_price:,} ₽")
                 return False
             if max_price and ad_price > max_price:
-                logger.info(f"Цена: {ad_price:,} ₽ > {max_price:,} ₽")
                 return False
-            logger.info(f"Цена: {ad_price:,} ₽ в диапазоне")
 
         ad_mileage = ad.get("mileage")
         if ad_mileage is not None:
             max_mileage = filters.get("max_mileage")
             if max_mileage and ad_mileage > max_mileage:
-                logger.info(f"Пробег: {ad_mileage:,} км > {max_mileage:,} км")
                 return False
-            logger.info(f"Пробег: {ad_mileage:,} км в пределах")
 
         region = filters.get("region")
         if region:
@@ -205,11 +186,8 @@ def matches_filter(ad: Dict, filter_set: FilterSet) -> bool:
 
             ad_region_norm = CITY_TO_REGION.get(ad_region, ad_region)
             if filter_region not in ad_region_norm and ad_region_norm not in filter_region:
-                logger.info(f"Регион: '{filter_region}' не найден в '{ad_region}'")
                 return False
-            logger.info(f"Регион: '{filter_region}' найден")
 
-        logger.info(f"УСПЕХ: Объявление '{ad_title}...' ПОДХОДИТ под фильтр '{filter_name}'")
         return True
 
     except Exception as e:
@@ -218,7 +196,6 @@ def matches_filter(ad: Dict, filter_set: FilterSet) -> bool:
 
 
 def parse_ad_block(block) -> Optional[Dict]:
-    """Извлекает данные об объявлении из HTML-блока."""
     try:
         link_tag = block.find("h3", class_="board_list_item_title")
         if link_tag:
@@ -231,7 +208,6 @@ def parse_ad_block(block) -> Optional[Dict]:
             link_tag = block.find("a", href=True)
 
         if not link_tag or not link_tag.get("href"):
-            logger.debug("Не найдена ссылка на объявление в блоке")
             return None
 
         href = link_tag["href"].strip()
@@ -246,102 +222,27 @@ def parse_ad_block(block) -> Optional[Dict]:
 
         title_lower = title.lower()
         non_car_keywords = [
-            "эвакуатор",
-            "установка гбо",
-            "ремонт",
-            "покраска",
-            "диагностика",
-            "шиномонтаж",
-            "запчасти",
-            "детали",
-            "аренда авто",
-            "прокат авто",
-            "грузовой",
-            "грузовик",
-            "камаз",
-            "автобус",
-            "прицеп",
-            "мотоцикл",
-            "скутер",
-            "квадроцикл",
-            "выкуп авто",
-            "залог",
-            "на запчасти",
-            "битый",
-            "аварийный",
+            "эвакуатор", "установка гбо", "ремонт", "покраска", "диагностика",
+            "шиномонтаж", "запчасти", "детали", "аренда авто", "прокат авто",
+            "грузовой", "грузовик", "камаз", "автобус", "прицеп", "мотоцикл",
+            "скутер", "квадроцикл", "выкуп авто", "залог", "на запчасти",
+            "битый", "аварийный",
         ]
         if any(word in title_lower for word in non_car_keywords):
-            logger.debug(f"Пропущено не-авто объявление: {title[:50]}...")
             return None
 
         known_brands = [
-            "lada",
-            "ваз",
-            "лада",
-            "ренуо",
-            "renault",
-            "рено",
-            "киа",
-            "kia",
-            "хендай",
-            "hyundai",
-            "тойота",
-            "toyota",
-            "ниссан",
-            "nissan",
-            "мазда",
-            "mazda",
-            "мицубиси",
-            "mitsubishi",
-            "шкода",
-            "skoda",
-            "фольксваген",
-            "волкцваген",
-            "volkswagen",
-            "vw",
-            "опель",
-            "opel",
-            "форд",
-            "ford",
-            "шевроле",
-            "шевролет",
-            "chevrolet",
-            "мерседес",
-            "мерс",
-            "бмв",
-            "бэха",
-            "беха",
-            "беху",
-            "bmw",
-            "ауди",
-            "audi",
-            "вольво",
-            "volvo",
-            "субару",
-            "subaru",
-            "хонда",
-            "хунда",
-            "хонду",
-            "honda",
-            "сузуки",
-            "suzuki",
-            "дэу",
-            "даеву",
-            "daewoo",
-            "газель",
-            "газ",
-            "уаз",
-            "уазик",
-            "moskvich",
-            "москвич",
-            "элантра",
-            "elantra",
-            "solaris",
-            "соларис",
-            "рио",
-            "rio",
-            "creta",
-            "крета",
+            "lada", "ваз", "лада", "приора", "приору", "гранта", "гранту",
+            "калина", "калину", "веста", "весту", "ренуо", "renault", "рено",
+            "киа", "kia", "хендай", "hyundai", "тойота", "toyota", "ниссан",
+            "nissan", "мазда", "mazda", "мицубиси", "mitsubishi", "шкода",
+            "skoda", "фольксваген", "волкцваген", "volkswagen", "vw", "опель",
+            "opel", "форд", "ford", "шевроле", "шевролет", "chevrolet", "мерседес",
+            "мерс", "бмв", "бэха", "беха", "беху", "bmw", "ауди", "audi", "вольво",
+            "volvo", "субару", "subaru", "хонда", "хунда", "хонду", "honda",
+            "сузуки", "suzuki", "дэу", "даеву", "daewoo", "газель", "газ", "уаз",
+            "уазик", "moskvich", "москвич", "элантра", "elantra", "solaris",
+            "соларис", "рио", "rio", "creta", "крета",
         ]
 
         brand = ""
@@ -355,7 +256,6 @@ def parse_ad_block(block) -> Optional[Dict]:
                 break
 
         if not brand:
-            logger.debug(f"Не распознана марка в: {title[:50]}...")
             return None
 
         year_match = re.search(r"\b(19[89]\d|20[012]\d)\b", title)
@@ -374,8 +274,7 @@ def parse_ad_block(block) -> Optional[Dict]:
                         price *= 1000
                     if price < 5000 or price > 50000000:
                         price = None
-                except (ValueError, OverflowError) as e:
-                    logger.warning(f"Ошибка парсинга цены '{price_str}': {e}")
+                except (ValueError, OverflowError):
                     price = None
 
         mileage = None
@@ -399,8 +298,7 @@ def parse_ad_block(block) -> Optional[Dict]:
                         mileage = int(mileage_val)
                     if mileage < 1000 or mileage > 1000000:
                         mileage = None
-                except (ValueError, TypeError, OverflowError) as e:
-                    logger.warning(f"Ошибка парсинга пробега: {e}")
+                except (ValueError, TypeError, OverflowError):
                     mileage = None
 
         region = ""
@@ -445,7 +343,6 @@ def parse_ad_block(block) -> Optional[Dict]:
 async def parse_berkat_pages(
     session: aiohttp.ClientSession, max_pages: int = 5
 ) -> List[Dict]:
-    """Парсит указанное количество страниц berkat.ru."""
     all_ads = []
     logger.info(f"Начало парсинга {max_pages} страниц berkat.ru")
 
@@ -479,93 +376,73 @@ async def parse_berkat_pages(
     return all_ads
 
 
-async def process_ads(ads: List[Dict]) -> None:
-    """Обрабатывает объявления с надёжной защитой от дубликатов через единую транзакцию."""
+async def save_new_ads(ads: List[Dict]) -> List[Ad]:
+    saved_ads = []
+    saved_count = 0
+
     async with async_session() as db:
-        active_filters = await get_all_active_filters(db)
-        if not active_filters:
-            logger.info("Нет активных фильтров — пропускаем обработку")
-            return
-
-        new_ads_count = 0
-        notifications_sent = 0
-
         for ad_data in ads:
             try:
-                # Получаем или создаём объявление
                 existing = await get_ad_by_source_external(
                     db, ad_data["source"], ad_data["external_id"]
                 )
-
-                if existing:
-                    ad = existing
-                    # Обновляем время парсинга для существующих объявлений
-                    ad.parsed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                else:
+                if not existing:
                     ad = Ad(**ad_data)
                     db.add(ad)
-                    await db.flush()  # Получаем ID до коммита
-                    new_ads_count += 1
+                    saved_ads.append(ad)
+                    saved_count += 1
+            except Exception as e:
+                logger.error(
+                    f"Ошибка сохранения объявления '{ad_data.get('title', 'N/A')}': {e}"
+                )
 
-                # Проверяем фильтры и отправляем уведомления
-                for filter_set in active_filters:
-                    if not matches_filter(ad_data, filter_set):
-                        continue
+        if saved_ads:
+            await db.commit()
+            for ad in saved_ads:
+                await db.refresh(ad)
 
-                    # 🔒 ПРОВЕРКА ДУБЛИКАТА: существует ли запись в SentNotification?
-                    stmt = (
-                        await db.execute(
-                            f"SELECT 1 FROM sent_notifications WHERE user_id = {filter_set.user_id} AND ad_id = {ad.id} AND filter_id = {filter_set.id}"
-                        )
-                    )
-                    if stmt.scalar():
+        logger.info(f"Сохранено новых объявлений: {saved_count}")
+
+    return saved_ads
+
+
+async def check_filters_and_notify(saved_ads: List[Ad]) -> None:
+    if not saved_ads:
+        logger.info("Нет новых объявлений для проверки фильтров")
+        return
+
+    logger.info(f"Проверка {len(saved_ads)} новых объявлений по фильтрам пользователей...")
+
+    async with async_session() as db:
+        active_filters = await get_all_active_filters(db)
+        logger.info(f"Найдено активных фильтров: {len(active_filters)}")
+
+        for ad in saved_ads:
+            for filter_set in active_filters:
+                if matches_filter(ad.__dict__, filter_set):
+                    if await has_sent_notification(db, filter_set.user_id, ad.id, filter_set.id):
                         logger.debug(
-                            f"Пропускаем уведомление (уже отправлялось): "
-                            f"пользователь={filter_set.user_id}, объявление={ad.id}, фильтр={filter_set.id}"
+                            f"Уведомление пропущено (уже отправлялось): "
+                            f"пользователь={filter_set.user_id}, объявление={ad.id}"
                         )
                         continue
 
-                    # Отправляем уведомление
                     try:
                         await send_ad_notification(
                             telegram_id=filter_set.user_id,
                             ad=ad,
                             filter_name=filter_set.name,
                         )
-                        
-                        # 🔒 СОЗДАЁМ ЗАПИСЬ В БД В ТОЙ ЖЕ ТРАНЗАКЦИИ
-                        notification = SentNotification(
-                            user_id=filter_set.user_id,
-                            ad_id=ad.id,
-                            filter_id=filter_set.id,
-                        )
-                        db.add(notification)
-                        notifications_sent += 1
+                        await mark_notification_sent(db, filter_set.user_id, ad.id, filter_set.id)
                         logger.info(
-                            f"✅ Уведомление отправлено: пользователь={filter_set.user_id}, "
-                            f"объявление={ad.id}, фильтр={filter_set.id}"
+                            f"Уведомление отправлено пользователю {filter_set.user_id} "
+                            f"по фильтру '{filter_set.name}'"
                         )
                     except Exception as e:
-                        logger.error(
-                            f"❌ Ошибка отправки уведомления пользователю {filter_set.user_id}: {e}"
-                        )
-
-            except Exception as e:
-                logger.error(
-                    f"❌ Ошибка обработки объявления '{ad_data.get('title', 'N/A')}': {e}"
-                )
-                continue
-
-        # 🔒 ЕДИНЫЙ COMMIT — все изменения фиксируются вместе
-        await db.commit()
-        logger.info(
-            f"✅ Обработано: {len(ads)} объявлений, новых: {new_ads_count}, "
-            f"уведомлений: {notifications_sent}"
-        )
+                        logger.error(f"Ошибка отправки уведомления: {e}")
 
 
 async def berkat_parse_task_async() -> None:
-    """Основная задача парсинга berkat.ru."""
     start_time = datetime.now()
     logger.info("=" * 60)
     logger.info(f"[{start_time}] Запуск парсинга berkat.ru...")
@@ -574,7 +451,11 @@ async def berkat_parse_task_async() -> None:
         async with aiohttp.ClientSession() as session:
             ads = await parse_berkat_pages(session, max_pages=5)
             if ads:
-                await process_ads(ads)
+                saved_ads = await save_new_ads(ads)
+                if saved_ads:
+                    await check_filters_and_notify(saved_ads)
+                else:
+                    logger.info("Новые объявления не найдены.")
             else:
                 logger.warning("Авто-объявления не найдены.")
 
@@ -584,7 +465,7 @@ async def berkat_parse_task_async() -> None:
         logger.info("=" * 60)
 
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка при парсинге: {e}", exc_info=True)
+        logger.error(f"Критическая ошибка при парсинге: {e}", exc_info=True)
         raise
 
 

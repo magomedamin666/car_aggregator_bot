@@ -6,14 +6,13 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
-from app.db.models import Ad, FilterSet, SentNotification, SubscriptionStatus, User
+from app.db.models import Ad, FilterSet, SentNotification, User
 
 
 logger = logging.getLogger(__name__)
 
 
 async def get_user_by_telegram_id(db: AsyncSession, telegram_id: int) -> Optional[User]:
-    """Получает пользователя по его Telegram ID."""
     stmt = select(User).where(User.telegram_id == telegram_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
@@ -25,12 +24,10 @@ async def create_user(
     username: str,
     subscription_status: str = "trial",
 ) -> User:
-    """Создаёт нового пользователя в системе."""
     user = User(
         telegram_id=telegram_id,
         username=username,
         subscription_status=subscription_status,
-        created_at=func.now(),
     )
     db.add(user)
     try:
@@ -48,7 +45,6 @@ async def create_filter_set(
     name: str,
     filters_json: dict,
 ) -> FilterSet:
-    """Создаёт новый фильтр для пользователя."""
     fs = FilterSet(
         user_id=user_id,
         name=name,
@@ -66,18 +62,18 @@ async def create_filter_set(
 
 
 async def get_active_filters(db: AsyncSession, user_id: int) -> List[FilterSet]:
-    """Получает все активные фильтры пользователя."""
     result = await db.execute(
         select(FilterSet).where(
-            and_(FilterSet.user_id == user_id, FilterSet.is_active == True)
+            FilterSet.user_id == user_id, FilterSet.is_active.is_(True)
         )
     )
     return result.scalars().all()
 
 
 async def get_all_active_filters(db: AsyncSession) -> List[FilterSet]:
-    """Получает все активные фильтры всех пользователей."""
-    result = await db.execute(select(FilterSet).where(FilterSet.is_active == True))
+    result = await db.execute(
+        select(FilterSet).where(FilterSet.is_active.is_(True))
+    )
     return result.scalars().all()
 
 
@@ -88,7 +84,6 @@ async def update_filter_set(
     filters_json: Optional[dict] = None,
     is_active: Optional[bool] = None,
 ) -> Optional[FilterSet]:
-    """Обновляет параметры фильтра."""
     fs = await db.get(FilterSet, filter_id)
     if not fs:
         return None
@@ -112,16 +107,12 @@ async def update_filter_set(
 async def get_ad_by_source_external(
     db: AsyncSession, source: str, external_id: str
 ) -> Optional[Ad]:
-    """Получает объявление по источнику и внешнему ID."""
-    stmt = select(Ad).where(
-        and_(Ad.source == source, Ad.external_id == external_id)
-    )
+    stmt = select(Ad).where(Ad.source == source, Ad.external_id == external_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
 async def create_ad(db: AsyncSession, ad_data: dict) -> Ad:
-    """Создаёт новое объявление в базе данных."""
     ad = Ad(**ad_data)
     db.add(ad)
     try:
@@ -134,7 +125,6 @@ async def create_ad(db: AsyncSession, ad_data: dict) -> Ad:
 
 
 async def get_new_ads(db: AsyncSession, since: Optional[datetime] = None) -> List[Ad]:
-    """Получает объявления, спарсенные после указанного времени."""
     if since is None:
         since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
 
@@ -146,13 +136,10 @@ async def get_new_ads(db: AsyncSession, since: Optional[datetime] = None) -> Lis
 async def has_sent_notification(
     db: AsyncSession, user_id: int, ad_id: int, filter_id: int
 ) -> bool:
-    """Проверяет, отправлялось ли уже уведомление пользователю по этому объявлению и фильтру."""
     stmt = select(SentNotification).where(
-        and_(
-            SentNotification.user_id == user_id,
-            SentNotification.ad_id == ad_id,
-            SentNotification.filter_id == filter_id,
-        )
+        SentNotification.user_id == user_id,
+        SentNotification.ad_id == ad_id,
+        SentNotification.filter_id == filter_id,
     )
     result = await db.execute(stmt)
     return result.scalar_one_or_none() is not None
@@ -161,7 +148,6 @@ async def has_sent_notification(
 async def mark_notification_sent(
     db: AsyncSession, user_id: int, ad_id: int, filter_id: int
 ) -> None:
-    """Отмечает уведомление как отправленное."""
     notification = SentNotification(
         user_id=user_id,
         ad_id=ad_id,

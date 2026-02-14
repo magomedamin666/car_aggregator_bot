@@ -7,7 +7,6 @@ from aiogram import Bot, Dispatcher
 
 from app.bot.handlers import router
 from app.core.config import settings
-from app.db.session import async_session, target_metadata
 from app.parsers.berkat_parser import berkat_parse_task_async
 
 
@@ -21,61 +20,46 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def create_tables():
-    """Создаёт таблицы в БД если их нет"""
-    async with async_session() as db:
-        # Создаём все таблицы, указанные в metadata
-        from app.db.models import Base
-        async with db.bind.connect() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("✅ Таблицы в БД созданы/проверены")
-
-
-async def periodic_parsing():
-    """Парсинг каждые 10 минут"""
+async def periodic_parsing() -> None:
     while True:
-        logger.info("⏰ Запуск парсинга berkat.ru...")
+        logger.info("⏰ Starting berkat.ru parsing...")
         try:
             await berkat_parse_task_async()
-            logger.info("✅ Парсинг завершён. Следующий запуск через 10 минут.")
+            logger.info("✅ Parsing completed. Next run in 10 minutes.")
         except Exception as e:
-            logger.error(f"❌ Ошибка парсинга: {e}")
-        
+            logger.error(f"❌ Parsing error: {e}")
+
         await asyncio.sleep(600)
 
 
-async def main():
-    # Создаём таблицы при запуске
-    await create_tables()
-
+async def main() -> None:
     bot = Bot(token=settings.BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
-    
-    # Запускаем парсер в фоне
+
     asyncio.create_task(periodic_parsing())
-    
+
     logger.info("=" * 60)
-    logger.info("✅ CarBot запущен!")
-    logger.info("   • Бот принимает команды")
-    logger.info("   • Парсинг berkat.ru каждые 10 минут")
-    logger.info("   • Уведомления без дубликатов")
+    logger.info("✅ CarBot started!")
+    logger.info("   • Bot is accepting commands")
+    logger.info("   • Parsing berkat.ru every 10 minutes")
+    logger.info("   • Duplicate-free notifications")
     logger.info("=" * 60)
-    
+
     try:
         await dp.start_polling(bot)
     except KeyboardInterrupt:
-        logger.info("👋 Бот остановлен пользователем")
+        logger.info("👋 Bot stopped by user")
     finally:
         await bot.session.close()
-        logger.info("✅ Система остановлена корректно")
+        logger.info("✅ System shut down correctly")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("👋 Система остановлена пользователем")
+        logger.info("👋 System stopped by user")
     except Exception as e:
-        logger.exception(f"❌ Критическая ошибка: {e}")
+        logger.exception(f"❌ Critical error: {e}")
         sys.exit(1)

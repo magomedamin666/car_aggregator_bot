@@ -3,7 +3,6 @@ import sys
 
 
 def setup_logger(name: str = "carbot") -> logging.Logger:
-    """Настраивает и возвращает логгер с консольным выводом."""
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
 

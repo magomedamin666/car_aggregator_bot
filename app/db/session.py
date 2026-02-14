@@ -27,7 +27,6 @@ async_session = async_sessionmaker(
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Предоставляет асинхронную сессию базы данных с автоматической фиксацией/откатом."""
     async with async_session() as session:
         try:
             yield session
@@ -36,12 +35,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.rollback()
             logger.error(f"Ошибка в сессии БД: {e}")
             raise
-        finally:
-            await session.close()
 
 
 async def dispose_engine() -> None:
-    """Закрывает пул соединений с базой данных."""
     await engine.dispose()
     logger.info("Пул соединений с БД закрыт")
 
