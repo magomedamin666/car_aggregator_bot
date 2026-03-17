@@ -1,0 +1,25 @@
+name: Run Bot
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Клонирование репозитория
+        uses: actions/checkout@v3
+
+      - name: Установка Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Установка зависимостей
+        run: pip install -r requirements.txt
+
+      - name: Запуск бота
+        run: python run_all.py
