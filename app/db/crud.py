@@ -159,3 +159,34 @@ async def mark_notification_sent(
     except Exception as e:
         await db.rollback()
         logger.warning(f"Не удалось отметить уведомление как отправленное: {e}")
+        
+        
+# app/db/crud.py (добавить)
+async def get_ads_by_filters(
+    db: AsyncSession,
+    brand: Optional[str] = None,
+    min_price: Optional[int] = None,
+    max_price: Optional[int] = None,
+    min_year: Optional[int] = None,
+    max_year: Optional[int] = None,
+    limit: int = 50
+) -> List[Ad]:
+    from sqlalchemy import select
+    
+    query = select(Ad).where(Ad.source == "berkat.ru")
+    
+    if brand:
+        query = query.where(Ad.brand.ilike(f"%{brand}%"))
+    if min_price is not None:
+        query = query.where(Ad.price >= min_price)
+    if max_price is not None:
+        query = query.where(Ad.price <= max_price)
+    if min_year is not None:
+        query = query.where(Ad.year >= min_year)
+    if max_year is not None:
+        query = query.where(Ad.year <= max_year)
+    
+    query = query.order_by(Ad.parsed_at.desc()).limit(limit)
+    
+    result = await db.execute(query)
+    return result.scalars().all()
